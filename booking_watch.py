@@ -18,9 +18,9 @@ from playwright.sync_api import sync_playwright
 CITY = "Chiang Mai, Thailand"
 CHECKIN = "2026-11-23"            # YYYY-MM-DD
 CHECKOUT = "2026-11-26"           # YYYY-MM-DD
-ADULTS = 2
+ADULTS = 1
 ROOMS = 1
-APARTMENTS_ONLY = True            # True = apartments only, False = any property type
+APARTMENTS_ONLY = False           # True = apartments only, False = any property type
 MAX_PRICE_PER_NIGHT = 50          # EUR per night, 0 = no limit
 MIN_PRICE_PER_NIGHT = 0           # EUR per night, 0 = no floor (raise to skip hostel beds)
 CURRENCY = "EUR"
