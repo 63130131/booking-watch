@@ -19,7 +19,9 @@ playwright install-deps chromium   # Linux server only (needs sudo)
 3. Put the same name in `NTFY_TOPIC` in `booking_watch.py` (topics on ntfy.sh are public to anyone who guesses the name).
 
 ### Config
-Edit the block at the top of `booking_watch.py`: `CITY` (**set this, it's a placeholder**), `CHECKIN`, `CHECKOUT`, `ADULTS`, `ROOMS`, `APARTMENTS_ONLY`, `MAX_TOTAL_PRICE` (0 = no limit).
+Edit the block at the top of `booking_watch.py`: `CITY`, `CHECKIN`, `CHECKOUT`, `ADULTS`, `ROOMS`, `APARTMENTS_ONLY`, `MAX_PRICE_PER_NIGHT` and `MIN_PRICE_PER_NIGHT` (0 = no limit / no floor).
+
+Booking.com shows one total price per card; the per-night limits are applied by dividing that total by the number of nights. Raise `MIN_PRICE_PER_NIGHT` in a cheap city to stop hostel beds filling the first results page.
 
 ## Run
 ```bash

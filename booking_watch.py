@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
@@ -15,13 +15,14 @@ from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
 # ============================ CONFIG (edit me) ============================
-CITY = "Ljubljana, Slovenia"      # TODO: set your "City, Country"
+CITY = "Chiang Mai, Thailand"
 CHECKIN = "2026-11-23"            # YYYY-MM-DD
 CHECKOUT = "2026-11-26"           # YYYY-MM-DD
 ADULTS = 2
 ROOMS = 1
 APARTMENTS_ONLY = True            # True = apartments only, False = any property type
-MAX_TOTAL_PRICE = 0               # EUR for the whole stay, 0 = no limit
+MAX_PRICE_PER_NIGHT = 50          # EUR per night, 0 = no limit
+MIN_PRICE_PER_NIGHT = 0           # EUR per night, 0 = no floor (raise to skip hostel beds)
 CURRENCY = "EUR"
 
 NTFY_SERVER = "https://ntfy.sh"
@@ -158,8 +159,20 @@ def main() -> int:
     if found is None:
         return 0  # CAPTCHA or failed load: exit cleanly, state untouched
 
-    if MAX_TOTAL_PRICE:
-        found = [f for f in found if f["price"] is not None and f["price"] <= MAX_TOTAL_PRICE]
+    if MAX_PRICE_PER_NIGHT or MIN_PRICE_PER_NIGHT:
+        nights = (date.fromisoformat(CHECKOUT) - date.fromisoformat(CHECKIN)).days
+        lo = MIN_PRICE_PER_NIGHT * nights
+        hi = (MAX_PRICE_PER_NIGHT * nights) if MAX_PRICE_PER_NIGHT else float("inf")
+        kept = []
+        for f in found:
+            if f["price"] is None:  # couldn't read a price: keep it, better than missing it
+                kept.append(f)
+            elif lo <= f["price"] <= hi:
+                f["per_night"] = round(f["price"] / nights)
+                kept.append(f)
+        log.info("%d of %d places within %s-%s EUR/night",
+                 len(kept), len(found), MIN_PRICE_PER_NIGHT, MAX_PRICE_PER_NIGHT or "∞")
+        found = kept
     current = {f["id"]: f for f in found}
     log.info("%d places available", len(current))
 
@@ -174,8 +187,10 @@ def main() -> int:
             for pid in current.keys() - previous:
                 f = current[pid]
                 price = f["price_txt"] or "price n/a"
-                log.info("NEW: %s (%s) %s", f["name"], price, f["link"])
-                notify(f"New place: {f['name']}", f"{price} for the stay\n{CHECKIN} → {CHECKOUT}",
+                per = f" (~{f['per_night']} EUR/night)" if f.get("per_night") else ""
+                log.info("NEW: %s (%s)%s %s", f["name"], price, per, f["link"])
+                notify(f"New place: {f['name']}",
+                       f"{price} total{per}\n{CHECKIN} → {CHECKOUT}",
                        click=f["link"], priority=4)
     except Exception as e:
         # Don't save state, so we retry notifying on the next run
