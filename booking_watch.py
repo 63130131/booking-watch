@@ -36,9 +36,19 @@ PAGE_TIMEOUT_MS = 45_000
 
 APARTMENT_FILTER = "ht_id=201"  # Booking.com property type id for apartments
 
-CAPTCHA_MARKERS = ("captcha", "awswaf", "are you a robot", "verify you are human",
-                   "bot check", "unusual traffic")
-EMPTY_RE = re.compile(r"no availability|0 properties|no properties|couldn.t find any", re.I)
+# Booking.com serves headless browsers a page that falsely claims zero availability,
+# so the browser has to be a real window (xvfb-run provides one on a headless server).
+HEADLESS = False
+
+# Narrow on purpose: the bare word "captcha" appears in normal page scripts and
+# produced false positives. These only appear on an actual challenge page.
+CHALLENGE_MARKERS = ("awswaf", "are you a robot", "verify you are human",
+                     "unusual traffic", "access to this page has been denied")
+
+# The results <h1> is the reliable signal: "Chiang Mai: 54 properties found"
+# or "0 properties are available in and around this destination".
+FOUND_RE = re.compile(r"([\d,]+)\s+propert(?:y|ies)\s+found", re.I)
+ZERO_RE = re.compile(r"0\s+properties\s+are\s+available|no\s+properties\s+(?:are\s+)?available", re.I)
 
 log = logging.getLogger("booking_watch")
 
@@ -72,29 +82,63 @@ def parse_price(text: str):
 def scrape(url: str):
     """Return list of dicts (id, name, price, link), or None if blocked / page failed."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(locale="en-US", viewport={"width": 1366, "height": 900})
+        browser = p.chromium.launch(headless=HEADLESS)
+        ctx = browser.new_context(locale="en-US", viewport={"width": 1440, "height": 950})
         page = ctx.new_page()
         try:
+            # Warm-up: without a homepage visit first, Booking.com strips the search
+            # parameters off the deep link and returns an empty shell.
+            page.goto("https://www.booking.com/", timeout=PAGE_TIMEOUT_MS,
+                      wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+            for sel in ('#onetrust-accept-btn-handler', '[aria-label="Dismiss sign-in info."]'):
+                try:
+                    page.locator(sel).first.click(timeout=2000)
+                except PWTimeout:
+                    pass
+                except Exception:
+                    pass
+
             page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
             try:
-                page.wait_for_selector('[data-testid="property-card"]', timeout=20_000)
+                page.wait_for_selector('[data-testid="property-card"]', timeout=25_000)
             except PWTimeout:
                 pass
-            html = page.content().lower()
-            if any(m in html for m in CAPTCHA_MARKERS) and \
-                    page.locator('[data-testid="property-card"]').count() == 0:
-                log.warning("CAPTCHA / bot check detected. Not bypassing; exiting.")
-                return None
+
+            heading = ""
+            if page.locator("h1").count():
+                heading = page.locator("h1").first.inner_text().strip()
+            log.info("Results heading: %r", heading)
+
+            # Load the rest of page 1 (cards render lazily as you scroll).
+            for _ in range(4):
+                page.mouse.wheel(0, 4000)
+                page.wait_for_timeout(1200)
 
             cards = page.locator('[data-testid="property-card"]')
             n = cards.count()
             if n == 0:
-                if EMPTY_RE.search(page.inner_text("body")):
-                    log.info("Page loaded, no properties available.")
+                # Only now look for a challenge: these markers also appear in the
+                # scripts of perfectly normal pages, so they can't gate a success.
+                html = page.content().lower()
+                hit = next((m for m in CHALLENGE_MARKERS if m in html), None)
+                if ZERO_RE.search(heading):
+                    if HEADLESS:
+                        log.warning("Zero results, but HEADLESS=True returns false zeros. "
+                                    "Not trusting this; set HEADLESS=False.")
+                        return None
+                    log.info("Page loaded, genuinely no properties available.")
                     return []
-                log.warning("No property cards and no 'empty' message; treating as failed load.")
+                if hit:
+                    log.warning("Bot check / challenge page detected (marker %r). "
+                                "Not bypassing; exiting.", hit)
+                    return None
+                log.warning("No property cards and heading %r is not a zero-result "
+                            "message; treating as failed load.", heading)
                 return None
+            if m := FOUND_RE.search(heading):
+                log.info("Booking.com reports %s properties found; %d cards on page 1",
+                         m.group(1), n)
 
             results = []
             for i in range(n):

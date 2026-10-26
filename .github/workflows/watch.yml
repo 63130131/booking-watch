@@ -35,10 +35,15 @@ jobs:
 
       - run: playwright install --with-deps chromium
 
+      - name: Install xvfb
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+
+      # Booking.com serves headless browsers a false "0 properties available"
+      # page, so Chromium runs as a real window on a virtual display.
       - name: Run watcher
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python booking_watch.py
+        run: xvfb-run -a python booking_watch.py
 
       - name: Save state
         run: |
